@@ -1,5 +1,8 @@
-Full-blown GATK pipeline for 2bRAD data, based on bowtie2 mapping to a reference genome
-September 14, 2014, Mikhail Matz matz@utexas.edu
+GATK pipeline for 2bRAD data, based on bowtie2 mapping to a reference genome
+
+Based on the protocol from 2014 by Mikhail Matz, matz@utexas.edu
+Modified by Pierre De Wit, pierre.de_wit@marine.gu.se
+
 
 # setting up the genome reference
 
