@@ -34,14 +34,31 @@ samtools faidx Ibalt_genome_Aug2018_ccn.fasta
 java -jar ~/scripts/CreateSequenceDictionary.jar R=Ibalt_genome_Aug2018_ccn.fasta  O=Ibalt_genome_Aug2018_ccn.dict
 
 #----------------------------------
-# Copying and unzipping the pre-trimmed read files:
 
-./filecopy.sh
+## Now that the reference is ready, let's start working with the RAD data:
 
-gunzip *.gz
+# Trimming the reads of adapter sequences, pulling out only fragments with the BcgI restriction site:
+
+~/scripts/2bRAD_trim_launch.pl fq > trims.sh
+
+#Then open the file and make sure the path to 2bRADtrim.pl is correct, and add a header line #!/bin/bash
+
+chmod 755 trims.sh
+./trims.sh
+
+# Quality filtering (Q>20) using fastx_toolkit
+
+module load fastx_toolkit
+ls *.tr0 | perl -pe 's/^(\S+)\.tr0$/cat $1\.tr0 \| fastq_quality_filter -q 20 -p 90 >$1\.trim/' >filt0
+cat filt0 | perl -pe 's/filter /filter -Q33 /' > filt.sh
+
+#Then open the file and add a header line #!/bin/bash
+
+chmod 755 filt.sh
+./filt.sh
 
 #----------------------------------
-# mapping reads and reformatting mapped data files
+# Mapping reads and reformatting mapped data files
 
 # aligning with bowtie2 :
 
