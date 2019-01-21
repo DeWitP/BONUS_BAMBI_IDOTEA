@@ -1,5 +1,6 @@
-Full-blown GATK pipeline for 2bRAD data, based on bowtie2 mapping to a reference genome
-September 14, 2014, Mikhail Matz matz@utexas.edu
+### Full-blown GATK pipeline for 2bRAD data, based on bowtie2 mapping to a reference genome.
+### Based on the 2014 pipeline published by Mikhail Matz, which can be found at: https://github.com/z0on/2bRAD_GATK
+### September 6, 2018, Pierre De Wit, pierre.de_wit@marine.gu.se
 
 # setting up the genome reference
 
@@ -42,8 +43,6 @@ gunzip *.gz
 #----------------------------------
 # mapping reads and reformatting mapped data files
 
-## MADE IT TO HERE ON FRIDAY ###
-
 # aligning with bowtie2 :
 
 ~/scripts/2bRAD_bowtie2_launch.pl '\.trim$' /proj/data19/pierre/IB14/2018/Ibalt_genome_Aug2018_ccn.fasta > bt2_aln.sge
@@ -59,7 +58,7 @@ sed -i 's/-L 16/-L 16 -p 16/g' bt2_aln.sge
 #$ -pe mpich 16
 module load Bowtie2/v2.2.7
 
-# Re-save the file, then submit the job to the node0 queue:
+# Re-save the file, then submit the job to the queue:
 
 qsub bt2.sge
 
@@ -202,11 +201,6 @@ ls *.recal.bam > bams
 #----------------------------------
 # Second iteration of UnifiedGenotyper (on quality-recalibrated files)
 # this time FOR REAL! 
-# Mischa's comment below::
-# if you need indels, run the same process separately with --genotype_likelihoods_model INDEL
-# I do not recommend indel tracing for 2bRAD since the tags are too short for confident indels. 
-# If you still want to try, note that the subsequent recalibration stages would 
-# have do be done separately for indels, 
 
 samtools merge -h rg.txt merged_recalibrated.bam *.recal.bam
 
@@ -263,19 +257,12 @@ java -jar ~/scripts/GenomeAnalysisTK_3_6.jar -T ApplyRecalibration \
 --ts_filter_level 95.0 -mode SNP \
 -recalFile round2.recal -tranchesFile recalibrate_SNP.tranches -o gatk_after_vqsr.vcf
 
-#----------------------------------
-# ALTERNATIVE to GATK-based recalibration (if tranches are weird and error models fail to converge):
-# non-parametric quantile-based recalibration a-la de novo pipeline
-
-# ~/scripts/replicatesMatch.pl vcf=round2.names.vcf replicates=clonepairs.tab polyonly=1 >vqsr.vcf
-# ~/scripts/recalibrateSNPs_gatk.pl vcf=round2.names.vcf true=vqsr.vcf >gatk_after_vqsr.vcf
-
-# your best quality filter setting is the one with maximum "gain"
-
-#----------------------------------
-
 # restoring original contig names and coordinates:
 ~/scripts/retabvcf.pl vcf=gatk_after_vqsr.vcf tab=/proj/data19/pierre/IB14/2018/Ibalt_genome_Aug2018_cc.tab > retab.vcf
+
+# --------------------------
+
+# Additional filtering steps:
 
 # discarding loci with too many heterozygotes, which are likely lumped paralogs
 # (by default, fraction of heterozygotes should not exceed maxhet=0.75)
@@ -285,16 +272,12 @@ java -jar ~/scripts/GenomeAnalysisTK_3_6.jar -T ApplyRecalibration \
 # thinning SNP dataset - leaving one snp per tag
 # by default, it will leave the SNP with the highest minor allele frequency; this
 # is good for ADMIXTURE or Fst analysis
-# if you plan to use dadi, however, use it with the option criterion=maxDP-random
+
 ~/scripts/thinner.pl vcf=hetfilt.vcf > thin.vcf
 
 # applying filter and selecting polymorphic biallelic loci genotyped in 80% or more individuals
 # for parametric (GATK-based) recalibration"
 vcftools --vcf thin.vcf --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out filt0
-
-# for non parametric (GATK-based) recalibration: replace --minQ 15 in the following line
-# with the quantile of the highest "gain" as reported by recalibrateSNPs_gatk.pl
-#vcftools --vcf thin.vcf --minQ 15 --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out filt0
 
 # genotypic match between pairs of replicates 
 # (the most important one is the last one, Heterozygote Discovery Rate)	
@@ -321,385 +304,3 @@ vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --missing-indv
 
 vcftools --vcf final.recode.vcf --remove poor_data_inds.txt --remove-filtered-all --max-missing 1 --recode --recode-INFO-all --out final_nomissingdata
 
-
----------------------------------------------------
-
-# creating unthinned dataset for Tajima's D calculations
-# (for non-parametric recalibration, replace --remove-filtered-all with --minQ [quantile of the highest gain] )
-# vcftools --vcf hetfilt.vcf --remove clones2remove --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out finalUnthin
-
-
-# ===================================================
-# Analysis
-
-# creating population lists
-# in the example below all the files beginning with O are from one pop, K from another, so
-ls K*.recal.bam | perl -pe 's/\..+//' >K.pop
-ls O*.recal.bam | perl -pe 's/\..+//' >O.pop
-cat O.pop K.pop  | perl -pe 's/((.).+)/$1\t$2/' >OK.pops
-
-#-------------
-# need PGDspider - the format-converting software!
-# install PDGspider on your laptop: 
-# http://www.cmpg.unibe.ch/software/PGDSpider/#Download_and_Installation_Instructions  
-
-# install PGDspider on lonestar:
-cd ~/bin
-wget http://www.cmpg.unibe.ch/software/PGDSpider/PGDSpider_2.0.7.1.zip
-unzip PGDSpider_2.0.7.1.zip
-cd -
-
-#-------------
-# BayeScan: searching for Fst outliers
-
-# converting vcf to bayescan format
-
-# creating configuration file for PDGspider
-nano vcf2bayescan.spid
-
-# paste this (edit if needed):
-####################################
-# VCF Parser questions
-PARSER_FORMAT=VCF
-# Do you want to include a file with population definitions?
-VCF_PARSER_POP_QUESTION=true
-# Only input following regions (refSeqName:start:end, multiple regions: whitespace separated):
-VCF_PARSER_REGION_QUESTION=
-# What is the ploidy of the data?
-VCF_PARSER_PLOIDY_QUESTION=DIPLOID
-# Only output following individuals (ind1, ind2, ind4, ...):
-VCF_PARSER_IND_QUESTION=
-# Output genotypes as missing if the read depth of a position for the sample is below:
-VCF_PARSER_READ_QUESTION=
-# Take most likely genotype if "PL" or "GL" is given in the genotype field?
-VCF_PARSER_PL_QUESTION=true
-# Do you want to exclude loci with only missing data?
-VCF_PARSER_EXC_MISSING_LOCI_QUESTION=false
-# Select population definition file:
-VCF_PARSER_POP_FILE_QUESTION=./OK.pops
-# Only output SNPs with a phred-scaled quality of at least:
-VCF_PARSER_QUAL_QUESTION=
-# Do you want to include non-polymorphic SNPs?
-VCF_PARSER_MONOMORPHIC_QUESTION=false
-# Output genotypes as missing if the phred-scale genotype quality is below:
-VCF_PARSER_GTQUAL_QUESTION=
-
-# GESTE / BayeScan Writer questions
-WRITER_FORMAT=GESTE_BAYE_SCAN
-# Specify which data type should be included in the GESTE / BayeScan file  (GESTE / BayeScan can only analyze one data type per file):
-GESTE_BAYE_SCAN_WRITER_DATA_TYPE_QUESTION=SNP
-####################################
-
-java -Xmx1024m -Xms512m -jar ~/bin/PGDSpider_2.0.7.1/PGDSpider2-cli.jar -inputfile final.recode.vcf -outputfile OK.bayescan -spid vcf2bayescan.spid 
-
-# Download and install BayeScan 
-cd ~/bin
-wget http://cmpg.unibe.ch/software/BayeScan/files/BayeScan2.1.zip
-unzip BayeScan2.1.zip
-cp BayeScan2.1/binaries/BayeScan2.1_linux64bits bayescan
-chmod +x bayescan
-rm -r BayeScan*
-
-echo 'bayescan OK.bayescan -threads=192' >bs
-launcher_creator.py -j bs -n bs -l bsl
-cat bsl | perl -pe 's/12way 12/12way 192/' | perl -pe 's/h_rt=1/h_rt=24/' |  perl -pe 's/development/normal/' >bsll
-qsub bsll
-# this one takes a few hours
-
-#-------------
-# pi: (nucleotide diversity = expected heterozygosity)
-
-vcftools --vcf final.recode.vcf --keep O.pop --site-pi
-mv out.sites.pi O.pi
-vcftools --vcf final.recode.vcf  --keep K.pop --site-pi
-mv out.sites.pi K.pi
-
-#-------------
-# Fst:
-
-vcftools --vcf final.recode.vcf  --weir-fst-pop O.pop --weir-fst-pop K.pop  
-# 0.011437
-mv out.weir.fst OK.fst
-
-#-------------
-# Tajima's D (separately for two pops):
-
-vcftools --vcf finalUnthin.recode.vcf  --keep K.pop --TajimaD 75000
-mv out.Tajima.D K.td
-vcftools --vcf finalUnthin.recode.vcf  --keep O.pop --TajimaD 75000
-mv out.Tajima.D O.td
-
-#-------------
-# LD (using only bi-allelic sites within 15 kb of each other) - these two jobs take quite some time...
-echo 'vcftools --vcf final.recode.vcf --geno-r2 --ld-window-bp 15000' >ld
-launcher_creator.py -j ld -n ld -l ldj
-cat ldj | perl -pe 's/12way/1way/' | perl -pe 's/h_rt=1/h_rt=12/' |perl -pe 's/development/normal/' > ldjj
-qsub ldjj
-
-# wait for it to complete (~15 min), then do this (another 15-20 min):
-module load R
-echo 'Rscript ~/bin/analyzeLD.R' > ldr
-launcher_creator.py -j ldr -n ldr -l ldrj
-cat ldrj | perl -pe 's/12way/1way/' | perl -pe 's/h_rt=1/h_rt=24/' |perl -pe 's/development/normal/' > ldrjj
-qsub ldrjj
-
-# scp (or WinSCP) the resulting files: OK.baye_fst.txt, O.pi, K.pi, OK.fst, K.td, O.td, LD_quantized.RData 
-# to your laptop
-
-# use genomeScanPlots.R to plot it
-
-#-------------
-# ADMIXTURE
-#-------------
-
-# installing ADMIXTURE
-cd ~/bin/
-wget https://www.genetics.ucla.edu/software/admixture/binaries/admixture_linux-1.23.tar.gz --no-check-certificate
-tar vxf admixture_linux-1.23.tar.gz 
-mv admixture_linux-1.23/admixture .
-cd -
-
-# installing plink 1.09:
-cd ~/bin
-wget https://www.cog-genomics.org/static/bin/plink140918/plink_linux_x86_64.zip
-unzip plink_linux_x86_64.zip
-cd-
-
-# for denovo vcf, creating a dataset with fake "chr" chromosome designations
-cat denovo.vcf | perl -pe 's/locus(\d)(\d+)\t\d+/chr$1\t$2/' >chrom.recode.vcf
-
-# for GATK-based vcf, creating a high-thinned but not re-tabbed dataset with "chr" chromosome designations
-hetfilter.pl vcf=gatk_after_vqsr.vcf >hetfiltRaw.vcf
-thinner.pl vcf=hetfiltRaw.vcf interval=5000 | perl -pe 's/chrom/chr/g' >thinchrom.vcf
-vcftools --vcf thinchrom.vcf --remove clones2remove --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --out chrom
-
-# reformatting VCF into plink binary BED format
-plink --vcf chrom.recode.vcf --make-bed --out admix
-
-# running ADMIXTURE with
-# cross-validation to select K (bash script)
-for K in 1 2 3 4 5 6; \
-do admixture --cv admix.bed $K | tee log${K}.out; done
-
-grep -h CV log*.out # select K with the minimal value
-
-# listing individuals from vcf file
-grep "#CHROM" chrom.recode.vcf | perl -pe 's/\t/\n/g' | grep [0-9] > inds.list
-
-# scp the *.Q and inds.list files to laptop, plot it in R:
-# use admixturePlotting.R to plot (will require minor editing - population names)14/Arcs_GATK/Idotea_0002_reduced_pruned_arcs_scaffold_cc.tab > retab.vcf
-
-# discarding loci with too many heterozygotes, which are likely lumped paralogs
-# (by default, fraction of heterozygotes should not exceed maxhet=0.75)
-# this step can also filter for the fraction of missing genotypes (default maxmiss=0.5)
-~/scripts/hetfilter.pl vcf=retab.vcf >hetfilt.vcf
-
-# thinning SNP dataset - leaving one snp per tag
-# by default, it will leave the SNP with the highest minor allele frequency; this
-# is good for ADMIXTURE or Fst analysis
-# if you plan to use dadi, however, use it with the option criterion=maxDP-random
-~/scripts/thinner.pl vcf=hetfilt.vcf > thin.vcf
-
-# applying filter and selecting polymorphic biallelic loci genotyped in 80% or more individuals
-# for parametric (GATK-based) recalibration"
-vcftools --vcf thin.vcf --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out filt0
-#After filtering, kept 40460 out of a possible 73062 Sites
-
-# for non parametric (GATK-based) recalibration: replace --minQ 15 in the following line
-# with the quantile of the highest "gain" as reported by recalibrateSNPs_gatk.pl
-#vcftools --vcf thin.vcf --minQ 15 --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out filt0
-
-# genotypic match between pairs of replicates 
-# (the most important one is the last one, Heterozygote Discovery Rate)	
-~/scripts/repMatchStats.pl vcf=filt0.recode.vcf replicates=clonepairs.tab 
-# Saved the output as repmatchstats.txt!
-
-# creating final filtered file without clones (must list them in the file clones2remove):
-# (for non-parametric recalibration, replace --remove-filtered-all with --minQ [quantile of the highest gain] )
-vcftools --vcf thin.vcf --remove clones2remove --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out final
-
-# After filtering, kept 622 out of 744 Individuals
-# After filtering, kept 34709 out of a possible 55963 Sites
-
-#Finally, output all kinds of statistics with vcftools:
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --hardy
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --012
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --depth
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --site-mean-depth
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --het
-vcftools --vcf final.recode.vcf --out IB14_Arcs_GATK_v1_SNPs --missing-indv
-
-
-
-
-
-FINISHED THE PIPELINE TO HERE!!!
-
-
-
----------------------------------------------------
-
-# creating unthinned dataset for Tajima's D calculations
-# (for non-parametric recalibration, replace --remove-filtered-all with --minQ [quantile of the highest gain] )
-# vcftools --vcf hetfilt.vcf --remove clones2remove --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --recode-INFO-all --out finalUnthin
-
-
-# ===================================================
-# Analysis
-
-# creating population lists
-# in the example below all the files beginning with O are from one pop, K from another, so
-ls K*.recal.bam | perl -pe 's/\..+//' >K.pop
-ls O*.recal.bam | perl -pe 's/\..+//' >O.pop
-cat O.pop K.pop  | perl -pe 's/((.).+)/$1\t$2/' >OK.pops
-
-#-------------
-# need PGDspider - the format-converting software!
-# install PDGspider on your laptop: 
-# http://www.cmpg.unibe.ch/software/PGDSpider/#Download_and_Installation_Instructions  
-
-# install PGDspider on lonestar:
-cd ~/bin
-wget http://www.cmpg.unibe.ch/software/PGDSpider/PGDSpider_2.0.7.1.zip
-unzip PGDSpider_2.0.7.1.zip
-cd -
-
-#-------------
-# BayeScan: searching for Fst outliers
-
-# converting vcf to bayescan format
-
-# creating configuration file for PDGspider
-nano vcf2bayescan.spid
-
-# paste this (edit if needed):
-####################################
-# VCF Parser questions
-PARSER_FORMAT=VCF
-# Do you want to include a file with population definitions?
-VCF_PARSER_POP_QUESTION=true
-# Only input following regions (refSeqName:start:end, multiple regions: whitespace separated):
-VCF_PARSER_REGION_QUESTION=
-# What is the ploidy of the data?
-VCF_PARSER_PLOIDY_QUESTION=DIPLOID
-# Only output following individuals (ind1, ind2, ind4, ...):
-VCF_PARSER_IND_QUESTION=
-# Output genotypes as missing if the read depth of a position for the sample is below:
-VCF_PARSER_READ_QUESTION=
-# Take most likely genotype if "PL" or "GL" is given in the genotype field?
-VCF_PARSER_PL_QUESTION=true
-# Do you want to exclude loci with only missing data?
-VCF_PARSER_EXC_MISSING_LOCI_QUESTION=false
-# Select population definition file:
-VCF_PARSER_POP_FILE_QUESTION=./OK.pops
-# Only output SNPs with a phred-scaled quality of at least:
-VCF_PARSER_QUAL_QUESTION=
-# Do you want to include non-polymorphic SNPs?
-VCF_PARSER_MONOMORPHIC_QUESTION=false
-# Output genotypes as missing if the phred-scale genotype quality is below:
-VCF_PARSER_GTQUAL_QUESTION=
-
-# GESTE / BayeScan Writer questions
-WRITER_FORMAT=GESTE_BAYE_SCAN
-# Specify which data type should be included in the GESTE / BayeScan file  (GESTE / BayeScan can only analyze one data type per file):
-GESTE_BAYE_SCAN_WRITER_DATA_TYPE_QUESTION=SNP
-####################################
-
-java -Xmx1024m -Xms512m -jar ~/bin/PGDSpider_2.0.7.1/PGDSpider2-cli.jar -inputfile final.recode.vcf -outputfile OK.bayescan -spid vcf2bayescan.spid 
-
-# Download and install BayeScan 
-cd ~/bin
-wget http://cmpg.unibe.ch/software/BayeScan/files/BayeScan2.1.zip
-unzip BayeScan2.1.zip
-cp BayeScan2.1/binaries/BayeScan2.1_linux64bits bayescan
-chmod +x bayescan
-rm -r BayeScan*
-
-echo 'bayescan OK.bayescan -threads=192' >bs
-launcher_creator.py -j bs -n bs -l bsl
-cat bsl | perl -pe 's/12way 12/12way 192/' | perl -pe 's/h_rt=1/h_rt=24/' |  perl -pe 's/development/normal/' >bsll
-qsub bsll
-# this one takes a few hours
-
-#-------------
-# pi: (nucleotide diversity = expected heterozygosity)
-
-vcftools --vcf final.recode.vcf --keep O.pop --site-pi
-mv out.sites.pi O.pi
-vcftools --vcf final.recode.vcf  --keep K.pop --site-pi
-mv out.sites.pi K.pi
-
-#-------------
-# Fst:
-
-vcftools --vcf final.recode.vcf  --weir-fst-pop O.pop --weir-fst-pop K.pop  
-# 0.011437
-mv out.weir.fst OK.fst
-
-#-------------
-# Tajima's D (separately for two pops):
-
-vcftools --vcf finalUnthin.recode.vcf  --keep K.pop --TajimaD 75000
-mv out.Tajima.D K.td
-vcftools --vcf finalUnthin.recode.vcf  --keep O.pop --TajimaD 75000
-mv out.Tajima.D O.td
-
-#-------------
-# LD (using only bi-allelic sites within 15 kb of each other) - these two jobs take quite some time...
-echo 'vcftools --vcf final.recode.vcf --geno-r2 --ld-window-bp 15000' >ld
-launcher_creator.py -j ld -n ld -l ldj
-cat ldj | perl -pe 's/12way/1way/' | perl -pe 's/h_rt=1/h_rt=12/' |perl -pe 's/development/normal/' > ldjj
-qsub ldjj
-
-# wait for it to complete (~15 min), then do this (another 15-20 min):
-module load R
-echo 'Rscript ~/bin/analyzeLD.R' > ldr
-launcher_creator.py -j ldr -n ldr -l ldrj
-cat ldrj | perl -pe 's/12way/1way/' | perl -pe 's/h_rt=1/h_rt=24/' |perl -pe 's/development/normal/' > ldrjj
-qsub ldrjj
-
-# scp (or WinSCP) the resulting files: OK.baye_fst.txt, O.pi, K.pi, OK.fst, K.td, O.td, LD_quantized.RData 
-# to your laptop
-
-# use genomeScanPlots.R to plot it
-
-#-------------
-# ADMIXTURE
-#-------------
-
-# installing ADMIXTURE
-cd ~/bin/
-wget https://www.genetics.ucla.edu/software/admixture/binaries/admixture_linux-1.23.tar.gz --no-check-certificate
-tar vxf admixture_linux-1.23.tar.gz 
-mv admixture_linux-1.23/admixture .
-cd -
-
-# installing plink 1.09:
-cd ~/bin
-wget https://www.cog-genomics.org/static/bin/plink140918/plink_linux_x86_64.zip
-unzip plink_linux_x86_64.zip
-cd-
-
-# for denovo vcf, creating a dataset with fake "chr" chromosome designations
-cat denovo.vcf | perl -pe 's/locus(\d)(\d+)\t\d+/chr$1\t$2/' >chrom.recode.vcf
-
-# for GATK-based vcf, creating a high-thinned but not re-tabbed dataset with "chr" chromosome designations
-hetfilter.pl vcf=gatk_after_vqsr.vcf >hetfiltRaw.vcf
-thinner.pl vcf=hetfiltRaw.vcf interval=5000 | perl -pe 's/chrom/chr/g' >thinchrom.vcf
-vcftools --vcf thinchrom.vcf --remove clones2remove --remove-filtered-all --max-missing 0.8  --min-alleles 2 --max-alleles 2 --recode --out chrom
-
-# reformatting VCF into plink binary BED format
-plink --vcf chrom.recode.vcf --make-bed --out admix
-
-# running ADMIXTURE with
-# cross-validation to select K (bash script)
-for K in 1 2 3 4 5 6; \
-do admixture --cv admix.bed $K | tee log${K}.out; done
-
-grep -h CV log*.out # select K with the minimal value
-
-# listing individuals from vcf file
-grep "#CHROM" chrom.recode.vcf | perl -pe 's/\t/\n/g' | grep [0-9] > inds.list
-
-# scp the *.Q and inds.list files to laptop, plot it in R:
-# use admixturePlotting.R to plot (will require minor editing - population names)
